@@ -1,0 +1,96 @@
+# Security and privacy — synthetic local prototype
+
+No production security, clinical validation or regulatory compliance is claimed. Use synthetic data and loopback interfaces. The existing demo identity requires a server-side active doctor record and explicit DEMO_MODE outside production. Header-based demo access is not production authentication. Original Phase 1 patient routes retain UUID-based access; real patient authentication and access tokens remain required before external deployment.
+
+Staff document reads/reviews, triage data and acknowledgements are authorized on the server. Actor identity is server-owned. WebSockets use authenticated, one-use 30-second admission tickets, an Origin allowlist and a negotiated medikiosk subprotocol. Tickets are process-local and sent in the subprotocol, not URLs. Deployment identity/session revocation and multi-worker messaging remain outside this prototype.
+
+Voice consent is checked before invoking ASR and again when accepting source voice. Candidates are signed and bound to exact text, session, question, language and revision. They expire after 10 minutes or backend restart. Confirmation stores source/provider provenance; editing records typed wording. Candidates/audio are not stored as clinical answers before confirmation.
+
+FastAPI/Starlette multipart parsing may spool uploads above its threshold to temporary disk before the service checks consent. Routes close uploaded files on success, failure and rejection. No audio is deliberately saved to PostgreSQL or object storage. Abrupt termination, OS temporary-file policy, memory zeroization and upstream provider retention are not covered by a claim of guaranteed erasure. Browser cancellation stops tracks and discards late callbacks/uploads.
+
+Documents validate type, size and decoded content before database persistence. Local storage resolves paths and enforces containment; database failures trigger file cleanup. There is no atomic transaction spanning filesystem and SQL across process/power loss. Original document reads require staff authorization. Mock extraction is content-addressed synthetic fixture behavior, not OCR of arbitrary uploads; no confidence is invented.
+
+NVIDIA sends only eligible text/language/field context, omitting identifying metadata. Identifiers embedded in free text or voice are **not automatically redacted**. Neither metadata minimization nor SecretStr constitutes complete de-identification. Provider keys remain in environment/local ignored files, are excluded from public configuration, and must never be logged or committed. BHASHINI callback targets are constrained, redirects/environment proxies disabled, payloads bounded and service calls deadline-limited. Live provider acceptance remains separate from mocked tests.
+
+Unexpected errors log only exception class, not exception messages, submitted values, query strings or stack-local payloads. Audit events retain server actor/version/source linkage and review history in the database. Do not log raw audio, OCR text, answers, credentials or admission tokens.
+
+Alert delivery uses bounded writes to authorized sockets and browser resynchronization. A successful write does not establish human receipt; patient copy asks for direct staff contact. Current trigger state and acknowledgement history are separate. Rule content is prototype/unvalidated; unknown language is not evidence of absence.
+
+Security verification and outstanding acceptance gates are recorded in [stabilization status](stabilization-implementation-status.md). Full production authorization, encrypted deployment, consent revocation across active sessions, retention operations and crash-recovery controls require separate scope and review.
+
+## Phase 7 access and audit boundary
+
+Medical-fact, timeline, discrepancy, and fact-review APIs reuse the existing staff dependency and sharing-consent check. No parallel demo bypass or public patient fact endpoint was added. Reviewer ID and review time come from the server-resolved active doctor; extra caller-supplied identity fields are rejected.
+
+Original clinical values and raw source remain immutable. Corrections are additive revisions with optimistic versions; confirmed/cancelled sessions reject mutations. Audit metadata records only fact identifiers, type, status, and version—not corrected clinical values. Raw fact/source content is not intentionally written to application logs.
+
+This remains header-gated local demo authorization, not production authentication. Source-document links are still fetched through authorized backend routes. No production encryption, retention, tenant isolation, external identity, or clinical compliance claim follows from these controls.
+
+## Phase 8 summary drafting, revision audit, and clinical boundaries
+
+Summary drafting, review, regeneration, and confirmation endpoints reuse the existing server-resolved staff authorization and session sharing consent checks.
+
+1. **Server-Enforced Actor Provenance**: `confirmed_by`, reviewer identity, and `actor_user_id` are determined exclusively by the authenticated server session. Any client attempt to forge reviewer ID in request bodies is rejected (validation error 422).
+2. **Optimistic Concurrency Control**: All draft edit, regeneration, and confirmation requests require `expected_version`. Version conflicts return HTTP 409 `VERSION_CONFLICT` without modifying persisted data.
+3. **Confirmed Record Immutability**: Upon clinical sign-off (`POST /summary/confirm`), the summary transitions to `confirmed` status with `confirmed_text` locked. Any subsequent edit or regeneration attempt fails closed with HTTP 409 `CONFIRMED_IMMUTABLE`.
+4. **Append-Only Audit Trail**: Summary creation, clinician revisions, draft regenerations, and final confirmations append immutable `summary_revisions` records with explicit `actor_type` (`SYSTEM` vs `DOCTOR`), structured/text snapshots, and clinician review notes.
+5. **Non-Diagnostic Clinical Safety Boundary**:
+   - The deterministic summary drafting engine synthesizes only validated facts without diagnosing, prescribing, or inferring diseases.
+   - Unknown and unaddressed fields are explicitly documented as missing.
+   - AYUSH pathways are prominently badged with demonstration and supportive-documentation disclaimers.
+   - Raw medical text and sensitive clinical observations are excluded from unsafe system logs.
+
+## Phase 9 verification hardening and amendment security boundary
+
+1. **Anti-Forgery on Amendments & Field Verifications**:
+   - `POST /summary/amend` and `POST /field-verifications` resolve clinician identity exclusively from server session credentials (`current_user.id`).
+   - Client-provided actor IDs or timestamps are disallowed and rejected.
+2. **Confirmed Record Immutability Preserved**:
+   - Filing an amendment (`POST /summary/amend`) never mutates or erases `confirmed_text`, `confirmed_by`, or `confirmed_at`.
+   - The original confirmed clinical record remains permanently preserved in place and in audit history.
+   - The amendment is stored in dedicated fields (`amended_text`, `amended_by`, `amended_at`, `amendment_notes`) and logged as a versioned addendum in `summary_revisions`.
+3. **Optimistic Locking on Field Verifications**:
+   - Field verification supports `expected_version` checks to prevent race conditions across multi-tab clinician reviews. Mismatches return HTTP 409 `VERSION_CONFLICT`.
+4. **Session Audit Trail Access Control**:
+   - `GET /audit-trail` is restricted to authorized staff (`X-Demo-Doctor: true`).
+   - Audit logs capture actor classification (`DOCTOR`, `PATIENT`, `SYSTEM`), actions, and structured metadata without exposing raw secrets, authentication tokens, or uncontrolled diagnostic claims.
+
+## Phase 10 FHIR R4 export security and privacy boundary
+
+1. **Staff Authorization Enforcement**:
+   - FHIR export and bundle retrieval endpoints (`GET /api/doctor/sessions/{session_id}/fhir/export` and `GET /api/doctor/sessions/{session_id}/fhir/bundle`) are restricted to authorized clinical staff (`X-Demo-Doctor: true`).
+   - Requests without valid clinical staff credentials or authorization fail closed with HTTP 401/403.
+   - Patient-facing routes have no direct access to FHIR export or raw bundle generation endpoints.
+2. **Audit Logging on Export Operations**:
+   - Every FHIR export operation logs a versioned audit event:
+     - `FHIR_EXPORTED` on structured export overview generation with bundle type and resource counts recorded.
+     - `FHIR_BUNDLE_ACCESSED` on raw FHIR bundle payload access with bundle type and total entry count recorded.
+   - Raw clinical bundles and patient identifiers are not written into plain application system logs.
+3. **Clinical Boundary & Non-Diagnostic Export**:
+   - Exported FHIR `Condition` resources represent provisional patient-reported symptoms and complaints only (`clinicalStatus: "active"`, `verificationStatus: "provisional"`).
+   - Non-diagnostic note added to every condition: `"Non-diagnostic. Requires clinical assessment."`
+   - FHIR export preserves the system invariant: never declare an autonomous diagnosis or prescribe medications.
+4. **Decoupled Ephemeral Generation & Provenance**:
+   - FHIR bundles are synthesized on-demand from validated PostgreSQL records using deterministic UUID-to-URN mapping (`urn:uuid:<id>`).
+   - No persistent PHI is duplicated into external FHIR databases or unverified caches.
+   - Low-confidence extractions and unverified OCR facts retain their explicit provenance and unverified flags in generated FHIR resources.
+
+## Phase 11 ABDM & HIS interoperability security and privacy boundary
+
+1. **Staff Authorization & Access Control**:
+   - ABDM status inspection, session ABHA verification, care context linking, and HIS outbound dispatch routes (`/api/doctor/sessions/{id}/abdm/*`, `/api/doctor/sessions/{id}/his/*`) require authenticated clinical staff credentials (`X-Demo-Doctor: true`).
+   - Requests without authorized staff context fail closed with HTTP 401.
+   - Kiosk pre-registration verification (`POST /api/sessions/verify-abha`) is public but strictly rate-limited and returns only synthetic sandbox mock demographic data without access to prior patient histories or session records.
+2. **Explicit Consent Invariant for HIS Dispatch**:
+   - Outbound dispatch of clinical records and FHIR R4 bundles to hospital systems requires active patient sharing consent (`Consent.share_with_doctor == True`).
+   - Any attempt to dispatch or inspect clinical records without consent fails closed with HTTP 403 Forbidden.
+3. **Audit Logging on All Interoperability Operations**:
+   - Every interoperability action appends an immutable record to the session audit trail:
+     - `ABHA_VERIFIED`: Records verified ABHA address and formatted number without persisting raw demographic secrets.
+     - `ABDM_CARE_CONTEXT_LINKED`: Records care context reference, hospital token, and timestamp with clinician actor provenance.
+     - `HIS_DISPATCHED`: Records receipt reference, target system, entry count, and server actor provenance.
+4. **Sandbox Demonstration & Non-Production Disclaimers**:
+   - Prominent UI and API disclaimers state: *"ABDM Sandbox Demonstration (Non-Production / Synthetic Gateway). No real Aadhaar or production NHA gateway authentication claimed."*
+   - Default mode operates completely offline with deterministic mock fixtures, preventing accidental external transmission of synthetic health data.
+   - Clinical safety invariants remain strictly enforced: dispatched records and FHIR bundles never assert autonomous diagnoses or prescribe medications.
+
